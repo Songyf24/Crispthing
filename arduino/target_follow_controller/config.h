@@ -5,7 +5,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include <math.h>
 
 // ============================================================
 // 1. 功能开关
@@ -15,25 +14,18 @@
 // 1：允许电机运行
 #define MOTOR_ENABLED 1
 
-// 启用车头单个 JSN-SR04T 超声波传感器
-#define SENSOR_ENABLED 1
+// 当前暂不启用避障传感器
+#define SENSOR_ENABLED 0
+#define TOF_ENABLED 0
 
 // 急停：A3 接 NC，COM 接 GND
-#define EMERGENCY_STOP_ENABLED 0
+#define EMERGENCY_STOP_ENABLED 1
 
 // USB 手柄转接板通过 I2C 通信
-#define I2C_REMOTE_ENABLED 0
-
-// A4/A5 已分配给超声波传感器，不能同时启用 I2C 遥控板。
-#if SENSOR_ENABLED && I2C_REMOTE_ENABLED
-#error "A4/A5 are used by JSN-SR04T; keep I2C_REMOTE_ENABLED at 0"
-#endif
+#define I2C_REMOTE_ENABLED 1
 
 // 串口调试输出
 #define DEBUG_PRINT 1
-
-// 电池电压监测模块；模拟输出接 A0
-#define BATTERY_MONITOR_ENABLED 1
 
 
 // ============================================================
@@ -42,8 +34,8 @@
 //
 // 当前左右通道已经按照你的实车结果交换：
 //
-// M2 左侧履带：PWM=D6，方向=D9/D10
-// M1 右侧履带：PWM=D5，方向=D7/D8
+// 左侧履带：PWM=D6，方向=D9/D10
+// 右侧履带：PWM=D5，方向=D7/D8
 //
 const int LEFT_PWM  = 6;
 const int LEFT_IN1  = 12;
@@ -58,7 +50,7 @@ const int RIGHT_IN2 = 8;
 #define RIGHT_TRACK_DIR -1
 
 // 自主跟随转向符号
-#define TURN_SIGN -1
+#define TURN_SIGN 1
 
 
 // ============================================================
@@ -82,15 +74,27 @@ const unsigned long REMOTE_POLL_INTERVAL_MS = 20;
 
 
 // ============================================================
-// 4. 前方超声波传感器引脚
+// 4. 距离传感器引脚
 // ============================================================
 //
-// JSN-SR04T：VCC→5V，GND→GND，TRIG→A5，ECHO→A4
-// A4/A5 在这里作为普通数字引脚使用，不再用于 I2C。
-// Arduino UNO 为 5 V 逻辑，ECHO 可以直接接 A4。
+// 当前 SENSOR_ENABLED=0，这些引脚不会被初始化。
+// 后续正式接避障传感器时再根据实际硬件确认。
 //
-const int ULTRA_FRONT_TRIG = A5;
-const int ULTRA_FRONT_ECHO = A4;
+const int ULTRA_LEFT_TRIG  = 2;
+const int ULTRA_LEFT_ECHO  = 3;
+
+const int ULTRA_FRONT_TRIG = 4;
+const int ULTRA_FRONT_ECHO = 11;
+
+const int ULTRA_RIGHT_TRIG = 12;
+const int ULTRA_RIGHT_ECHO = A0;
+
+const int ULTRA_REAR_TRIG  = A1;
+const int ULTRA_REAR_ECHO  = A2;
+
+// ToF 默认使用 I2C：
+// SDA=A4，SCL=A5
+// 可与遥控板共用 I2C 总线，但当前 TOF_ENABLED=0
 
 
 // ============================================================
@@ -106,122 +110,50 @@ const int ULTRA_FRONT_ECHO = A4;
 //
 const int EMERGENCY_STOP_PIN = A3;
 
+
 // ============================================================
 // 6. 自主跟随参数
 // ============================================================
-
-// 指定跟随者的最低相似度
 const float SIMILARITY_MIN = 0.50f;
 
-// OpenBot 手机端已先完成连续 3 帧确认；
-// Arduino 再确认 2 条序号不同的有效 TARGET 后才允许开始前进。
-const uint8_t FAR_TARGET_CONFIRM_FRAMES = 2;
+// 目标距离小于该值时停止跟随
+const float FOLLOW_STOP_DISTANCE_CM = 100.0f;
 
-/*
- * 相对距离：
- * relativeDistance = 注册时肩髋尺度 / 当前肩髋尺度
- *
- * < 1：目标比注册位置近
- * ≈ 1：目标在注册位置附近
- * > 1：目标比注册位置远
- * -1 ：当前距离数据无效
- */
+// 目标距离达到该值时允许使用最大速度
+const float FOLLOW_FULL_SPEED_DISTANCE_CM = 250.0f;
 
-// 相对距离不超过 1.12 时，不再向前运动
-const float FOLLOW_STOP_RELATIVE_DISTANCE = 1.12f;
-
-/*
- * 停车后，目标必须重新远到 1.16，才开始累计 Arduino 端的
- * 2 条确认帧。1.12～1.16 是滞回区间，用于避免距离估计在
- * 停止阈值附近抖动时反复启停。
- */
-const float FOLLOW_RESTART_RELATIVE_DISTANCE = 1.16f;
-
-// 相对距离达到 1.80 后，允许使用最大跟随速度
-const float FOLLOW_FULL_SPEED_RELATIVE_DISTANCE = 1.80f;
 
 // ============================================================
 // 7. 速度与转向参数
 // ============================================================
 //
-// 当前实车参数：直行 PWM 80，差速转向输出最高限制为 90。
+// 当前仍处于架空调试阶段，最高速度先限制为 90。
+// 后续稳定后可逐步提高，但不要直接恢复到很高速度。
 //
-const int MIN_SPEED = 80;
-const int MAX_SPEED = 80;
-const int MOTOR_PWM_LIMIT = 90;
+const int MIN_SPEED = 70;
+const int MAX_SPEED = 90;
 
-// 普通跟随转向：启动/停止阈值构成滞回，减少中心附近抖动。
-const float K_TURN = 85.0f;
-const float TURN_START_X_THRESHOLD = 0.10f;
-const float TURN_STOP_X_THRESHOLD = 0.08f;
-const float TURN_NONLINEAR_EXPONENT = 1.50f;
-
-// 近距离原地对准参数。
-const float ALIGN_START_X_THRESHOLD = 0.15f;
-const float ALIGN_STOP_X_THRESHOLD = 0.08f;
-const float ALIGN_FULL_SPEED_X_THRESHOLD = 0.30f;
-const float ALIGN_TURN_NONLINEAR_EXPONENT = 1.50f;
-const uint8_t ALIGN_CONFIRM_FRAMES = 2;
-const int MIN_ALIGN_TURN_SPEED = 60;
-const int MAX_ALIGN_TURN_SPEED = 70;
-
-// ============================================================
-// 电机输出平滑
-// ============================================================
-
-// 是否启用电机速度斜坡
-#define MOTOR_RAMP_ENABLED 1
-
-/*
- * 每个控制周期最多变化的 PWM 数值。
- *
- * 当前控制周期为 20 ms：
- * 0 → 70 约需 14 个周期，即约 280 ms
- * 0 → 90 约需 18 个周期，即约 360 ms
- */
-const int MOTOR_RAMP_STEP = 5;
-
-// ============================================================
-// 8. 前方停车参数
-// ============================================================
-
-// 距离不大于 45 cm 时立即停车。
-const float ULTRA_FRONT_STOP_CM = 45.0f;
-
-// 障碍物离开到 55 cm 以外才解除停车，防止阈值附近反复启停。
-const float ULTRA_FRONT_RELEASE_CM = 55.0f;
-
-// 单个 JSN-SR04T 每 60 ms 测量一次。
-const unsigned long ULTRA_MEASURE_INTERVAL_MS = 60;
-
-// 等待 ECHO 的最长时间；约覆盖 2 m，超时表示没有有效回波。
-// 本功能只需判断 45～55 cm，可避免无回波时长时间阻塞主循环。
-const unsigned long ULTRA_ECHO_TIMEOUT_US = 12000;
+const float K_TURN = 70.0f;
+const float TARGET_CENTER_X_THRESHOLD = 0.25f;
 
 
 // ============================================================
-// 9. 电池电压监测参数
+// 8. 避障参数
 // ============================================================
+const float ULTRA_FRONT_SAFE_CM = 45.0f;
+const float ULTRA_SIDE_SAFE_CM  = 35.0f;
+const float ULTRA_REAR_SAFE_CM  = 35.0f;
 
-// 电压检测模块模拟输出；A4/A5 已用于前方超声波。
-const int BATTERY_VOLTAGE_PIN = A0;
-
-// 常见 0～25 V 电压检测模块的分压比例为 5:1。
-const float BATTERY_DIVIDER_RATIO = 5.0f;
-
-// 实测校准系数；后续可用万用表读数进行修正。
-const float BATTERY_CALIBRATION = 1.0f;
-
-// 每 200 ms 更新一次电池电压。
-const unsigned long BATTERY_SAMPLE_INTERVAL_MS = 200;
+const float TOF_TOO_CLOSE_CM = 80.0f;
+const float TOF_FAR_CM       = 180.0f;
 
 
 // ============================================================
-// 10. 超时与控制周期
+// 9. 超时与控制周期
 // ============================================================
 
 // OpenBot 目标数据超时
-const unsigned long TARGET_TIMEOUT_MS = 1000;
+const unsigned long TARGET_TIMEOUT_MS = 500;
 
 // 电脑串口单字符遥控超时
 const unsigned long REMOTE_TIMEOUT_MS = 1500;
@@ -245,22 +177,23 @@ const unsigned long CONTROL_INTERVAL_MS = 20;
 
 
 // ============================================================
-// 11. 公共数据类型
+// 10. 公共数据类型
 // ============================================================
 struct TargetData {
-  unsigned long sequence;       // 手机端消息序号
-  bool valid;                   // 目标是否有效
-  float xError;                 // 水平偏差，范围 -1～1
-
-  float relativeDistance;       // 注册尺度 / 当前尺度
-                                // >1 更远，<1 更近，-1 无效
-
-  float similarity;             // 身份相似度，范围 0～1
-  unsigned long receivedAt;     // Arduino 收到数据的时间
+  unsigned long sequence;      // OpenBot 帧序号
+  bool valid;                  // 目标是否有效
+  float xError;                // 水平偏差，范围 -1～1
+  float distanceCm;            // 目标距离，-1 表示无效
+  float similarity;            // 相似度，范围 0～1
+  unsigned long receivedAt;    // Arduino 收到新数据的时间
 };
 
 struct DistanceData {
+  float ultraLeftCm;
   float ultraFrontCm;
+  float ultraRightCm;
+  float ultraRearCm;
+  float tofFrontCm;
 };
 
 struct MotionCommand {
@@ -287,7 +220,7 @@ enum RemoteAction {
 
 
 // ============================================================
-// 12. 全局数据
+// 11. 全局数据
 // 在主 .ino 文件中真正定义
 // ============================================================
 extern TargetData latestTarget;
@@ -298,32 +231,14 @@ extern RobotState currentState;
 extern bool hasReceivedTarget;
 extern bool manualModeActive;
 
-// CMD,序号,STOP 触发的停车锁定
-extern bool commandStopActive;
-
-// CMD,序号,ESTOP 触发的软件急停锁定
-extern bool softwareEmergencyActive;
-
 extern RemoteAction remoteAction;
 extern int remoteSpeed;
 
 extern unsigned long lastRemoteCommandTime;
 
-extern float latestBatteryVoltage;
-extern bool batteryVoltageValid;
-
 
 // ============================================================
-// 13. 电池监测模块接口
-// ============================================================
-void setupBatteryMonitor();
-void updateBatteryMonitor(unsigned long now);
-bool isBatteryVoltageValid();
-float getBatteryVoltage();
-
-
-// ============================================================
-// 14. 遥控模块接口
+// 12. 遥控模块接口
 // ============================================================
 void setupRemoteControl();
 void readSerialCommunication();
@@ -341,7 +256,7 @@ void requireRemoteNeutralRearm();
 
 
 // ============================================================
-// 15. 避障模块接口
+// 13. 避障模块接口
 // ============================================================
 void setupObstacleSensors();
 
@@ -360,11 +275,9 @@ MotionCommand computeObstacleCommand(
 
 
 // ============================================================
-// 16. 自主跟随模块接口
+// 14. 自主跟随模块接口
 // ============================================================
 void setupAutoFollow();
-
-void resetAutoFollowConfirmation();
 
 bool parseTargetMessage(
     char* line,
@@ -376,7 +289,7 @@ MotionCommand computeAutoFollowCommand(
 
 
 // ============================================================
-// 17. 安全冗余与电机输出接口
+// 15. 安全冗余与电机输出接口
 // ============================================================
 void setupSafetyRedundancy();
 

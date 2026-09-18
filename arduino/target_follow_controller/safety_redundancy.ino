@@ -1,29 +1,6 @@
 #include "config.h"
 
 namespace {
-
-// 当前实际施加到左右履带的速度。
-int appliedLeftSpeed = 0;
-int appliedRightSpeed = 0;
-
-// 让 current 每个控制周期最多向 target 靠近 step。
-int approachSpeed(int current, int target, int step) {
-  if (current < target) {
-    current += step;
-    if (current > target) {
-      current = target;
-    }
-  }
-  else if (current > target) {
-    current -= step;
-    if (current < target) {
-      current = target;
-    }
-  }
-
-  return current;
-}
-
 bool isEmergencyStopActive() {
 #if EMERGENCY_STOP_ENABLED
   return digitalRead(EMERGENCY_STOP_PIN) == HIGH;
@@ -160,87 +137,12 @@ MotionCommand chooseSafeCommand(unsigned long now) {
   return computeAutoFollowCommand(latestTarget, latestDistance);
 }
 
-void applySafeMotionCommand(
-    const MotionCommand& cmd) {
+void applySafeMotionCommand(const MotionCommand& cmd) {
+  const int safeLeft =
+      constrain(cmd.leftSpeed, -MAX_SPEED, MAX_SPEED);
 
-  const int targetLeft =
-    constrain(
-        cmd.leftSpeed,
-        -MOTOR_PWM_LIMIT,
-        MOTOR_PWM_LIMIT);
-
-  const int targetRight =
-      constrain(
-          cmd.rightSpeed,
-          -MOTOR_PWM_LIMIT,
-          MOTOR_PWM_LIMIT);
-
-
-  /*
-   * 只要控制命令要求左右履带都停车，
-   * 就立即归零，不使用减速斜坡。
-   *
-   * 因此以下情况都能立即停车：
-   * - 目标丢失
-   * - 距离数据无效
-   * - 到达跟随距离
-   * - TARGET 超时
-   * - MANUAL / STOP / ESTOP
-   * - 硬件急停
-   */
-  if (targetLeft == 0 &&
-      targetRight == 0) {
-
-    appliedLeftSpeed = 0;
-    appliedRightSpeed = 0;
-  }
-  else {
-
-#if MOTOR_RAMP_ENABLED
-
-    /*
-     * 如果任意一侧履带准备反向：
-     *
-     * 不让 appliedSpeed 通过斜坡慢慢跨过零点，
-     * 而是先让左右履带同时立即停车。
-     *
-     * 下一控制周期如果反向命令仍然存在，
-     * 再从 0 开始向新的方向逐步加速。
-     */
-    const bool leftDirectionReversing =
-        (appliedLeftSpeed > 0 && targetLeft < 0) ||
-        (appliedLeftSpeed < 0 && targetLeft > 0);
-
-    const bool rightDirectionReversing =
-        (appliedRightSpeed > 0 && targetRight < 0) ||
-        (appliedRightSpeed < 0 && targetRight > 0);
-
-    if (leftDirectionReversing ||
-        rightDirectionReversing) {
-
-      appliedLeftSpeed = 0;
-      appliedRightSpeed = 0;
-    }
-    else {
-      appliedLeftSpeed =
-          approachSpeed(
-              appliedLeftSpeed,
-              targetLeft,
-              MOTOR_RAMP_STEP);
-
-      appliedRightSpeed =
-          approachSpeed(
-              appliedRightSpeed,
-              targetRight,
-              MOTOR_RAMP_STEP);
-    }
-
-#else
-    appliedLeftSpeed = targetLeft;
-    appliedRightSpeed = targetRight;
-#endif
-  }
-
+  const int safeRight =
+      constrain(cmd.rightSpeed, -MAX_SPEED, MAX_SPEED);
 
 #if DEBUG_PRINT
   // 只在状态或速度变化时打印，避免串口输出阻塞控制循环。
@@ -248,8 +150,8 @@ void applySafeMotionCommand(
   static int lastPrintedRight = 32767;
   static int lastPrintedState = -1;
 
-  if (appliedLeftSpeed != lastPrintedLeft ||
-      appliedRightSpeed != lastPrintedRight ||
+  if (safeLeft != lastPrintedLeft ||
+      safeRight != lastPrintedRight ||
       (int)currentState != lastPrintedState) {
 
     Serial.print(F("State="));
@@ -257,21 +159,19 @@ void applySafeMotionCommand(
     Serial.print(F(", reason="));
     Serial.print(cmd.reason);
     Serial.print(F(", L="));
-    Serial.print(appliedLeftSpeed);
+    Serial.print(safeLeft);
     Serial.print(F(", R="));
-    Serial.println(appliedRightSpeed);
+    Serial.println(safeRight);
 
-    lastPrintedLeft = appliedLeftSpeed;
-    lastPrintedRight = appliedRightSpeed;
+    lastPrintedLeft = safeLeft;
+    lastPrintedRight = safeRight;
     lastPrintedState = (int)currentState;
   }
 #endif
 
-  setMotorSpeed(appliedLeftSpeed, appliedRightSpeed);
+  setMotorSpeed(safeLeft, safeRight);
 }
 
 void stopCar() {
-  appliedLeftSpeed = 0;
-  appliedRightSpeed = 0;
   setMotorSpeed(0, 0);
 }

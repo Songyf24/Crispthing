@@ -7,7 +7,7 @@ TargetData latestTarget = {
   0,        // sequence
   false,    // valid
   0.0f,     // xError
-  -1.0f,    // relativeDistance
+  -1.0f,    // distanceCm
   0.0f,     // similarity
   0         // receivedAt
 };
@@ -23,6 +23,9 @@ unsigned long lastRemoteCommandTime = 0;
 unsigned long lastControlTime = 0;
 
 void setup() {
+  Serial.begin(115200);
+  delay(300);
+
   /*
    * 安全模块必须最先初始化：
    * 先把电机引脚设为输出并强制为 0，
@@ -31,10 +34,6 @@ void setup() {
   setupSafetyRedundancy();
   stopCar();
 
-  Serial.begin(115200);
-  delay(300);
-
-  setupBatteryMonitor();
   setupRemoteControl();
   setupObstacleSensors();
   setupAutoFollow();
@@ -86,8 +85,6 @@ void loop() {
     return;
   }
   lastControlTime = now;
-
-  updateBatteryMonitor(now);
 
   latestDistance = readDistanceSensors();
 
