@@ -14,8 +14,9 @@
 #define MOTOR_ENABLED 1
 
 // 总传感器开关。
-// 当前 Arduino 直连超声波暂时关闭，等待四路传感器接入 STM32。
-#define SENSOR_ENABLED 0
+// 未来：等待四路传感器接入 STM32。
+// Arduino UNO 直接读取单个前向超声波传感器。
+#define SENSOR_ENABLED 1
 
 // 四个方向必须独立启用。STM32 尚未接入时，只启用车头传感器。
 // 这样可避免初始化未接线的引脚，也可避免 D12 与电机方向引脚冲突。
@@ -33,7 +34,7 @@
 #define EMERGENCY_STOP_ENABLED 0
 
 // USB 手柄转接板通过 I2C 通信
-#define I2C_REMOTE_ENABLED 0
+#define I2C_REMOTE_ENABLED 1
 
 // 串口调试输出
 #define DEBUG_PRINT 1
@@ -90,15 +91,15 @@ const unsigned long REMOTE_POLL_INTERVAL_MS = 20;
 // 4. 距离传感器引脚
 // ============================================================
 //
-// 当前只启用车头：商家扩展板已将 TRIG/ECHO 接到 A4/A5。
+// 当前只启用车头：商家扩展板已将 TRIG/ECHO 接到 A4/A5，但考虑到要同时接手柄，改成A0, A1
 // 其余方向留作 STM32 到货后的接口定义，不会被初始化或读取。
 //
 const int ULTRA_LEFT_TRIG  = 2;
 const int ULTRA_LEFT_ECHO  = 3;
 
-// 车头超声波接口：商家扩展板固定连接到 A4/A5
-const int ULTRA_FRONT_TRIG = A4;
-const int ULTRA_FRONT_ECHO = A5;
+// 车头超声波接口：A0/A1
+const int ULTRA_FRONT_TRIG = A0;
+const int ULTRA_FRONT_ECHO = A1;
 
 const int ULTRA_RIGHT_TRIG = 12;
 const int ULTRA_RIGHT_ECHO = A0;
@@ -178,7 +179,7 @@ const float FOLLOW_FULL_SPEED_RELATIVE_DISTANCE = 1.80f;
 // 后续稳定后可逐步提高，但不要直接恢复到很高速度。
 //
 const int MIN_SPEED = 80;
-const int MAX_SPEED = 80;
+const int MAX_SPEED = 90;
 
 // 电机最终输出的安全上限，与普通跟随最高速度分开
 const int MOTOR_PWM_LIMIT = 90;
@@ -244,11 +245,11 @@ const int MOTOR_RAMP_STEP = 5;
 // ============================================================
 // 8. 避障参数
 // ============================================================
-// 下地初测保留较大的制动余量：连续两帧不超过 60 cm 即停车。
-const float ULTRA_FRONT_SAFE_CM = 60.0f;
+// 下地初测保留较大的制动余量：连续两帧不超过 45 cm 即停车。
+const float ULTRA_FRONT_SAFE_CM = 45.0f;
 
-// 停车后必须连续测到至少 75 cm 才能解除，形成 15 cm 滞回区。
-const float ULTRA_FRONT_RELEASE_CM = 75.0f;
+// 停车后必须连续测到至少 50 cm 才能解除，形成 5 cm 滞回区。
+const float ULTRA_FRONT_RELEASE_CM = 50.0f;
 
 const float ULTRA_SIDE_SAFE_CM  = 35.0f;
 const float ULTRA_REAR_SAFE_CM  = 35.0f;
